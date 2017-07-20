@@ -22,6 +22,7 @@
 #include <sstream>
 #include <iomanip>
 #include <getopt.h>
+#include <math.h>
 
 inline double tock() {
 	synchroniseDevices();
@@ -117,18 +118,99 @@ int main(int argc, char ** argv) {
 	double timings[7];
 	timings[0] = tock();
 
-	*logstream
-			<< "frame\tacquisition\tpreprocessing\ttracking\tintegration\traycasting\trendering\tcomputation\ttotal    \tX          \tY          \tZ         \ttracked   \tintegrated"
-			<< std::endl;
+	*logstream << "frame\tacquisition\tpreprocessing\ttracking\tintegration";
+	*logstream << "\traycasting\trendering\tcomputation\ttotal\tTx\tTy\tTz";
+	*logstream << "\tRx\tRy\tRz\tVTx\tVTy\tVTz\tATx\tATy\tATz\tVRx\tVRy\tVRz";
+	*logstream << "\tARx\tARy\tARz\ttracked\tintegrated";
+	*logstream << std::endl;
+
 	logstream->setf(std::ios::fixed, std::ios::floatfield);
+
+	// position (translation)
+	float xt = 0;
+	float yt = 0;
+	float zt = 0;
+	// rotation
+	float xr = 0;
+	float yr = 0;
+	float zr = 0;
+	// translation velocity
+	float vxt = 0;
+	float vyt = 0;
+	float vzt = 0;
+	// rotation velocity
+	float vxr = 0;
+	float vyr = 0;
+	float vzr = 0;
+	// translation acceleration
+	float axt = 0;
+	float ayt = 0;
+	float azt = 0;
+	// rotation acceleration
+	float axr = 0;
+	float ayr = 0;
+	float azr = 0;
 
 	while (reader->readNextDepthFrame(inputDepth)) {
 
 		Matrix4 pose = kfusion.getPose();
 
-		float xt = pose.data[0].w - init_pose.x;
-		float yt = pose.data[1].w - init_pose.y;
-		float zt = pose.data[2].w - init_pose.z;
+		// translation acceleration
+		axt = pose.data[0].w - init_pose.x - xt - vxt;
+		ayt = pose.data[1].w - init_pose.y - yt - vyt;
+		azt = pose.data[2].w - init_pose.z - zt - vzt;
+
+		// translation velocity
+		vxt = pose.data[0].w - init_pose.x - xt;
+		vyt = pose.data[1].w - init_pose.y - yt;
+		vzt = pose.data[2].w - init_pose.z - zt;
+
+		// translation
+		xt = pose.data[0].w - init_pose.x;
+		yt = pose.data[1].w - init_pose.y;
+		zt = pose.data[2].w - init_pose.z;
+
+		// convert pose matrix to euler angles
+		TooN::Matrix<4, 4, float> poseT = TooN::wrapMatrix<4, 4>(&pose.data[0].x);
+		TooN::Matrix<3, 3, float> m = poseT.slice(0, 0, 3, 3);
+		TooN::SO3<float> so3 = TooN::SO3<float>(m);
+		TooN::Vector<3, float> vec = so3.ln();
+
+		// rotational delta
+		float dxr, dyr, dzr;
+		if (vec[0] - xr > 6 || vec[0] - xr < -6){
+			dxr = vec[0] + xr;
+		}
+		else{
+			dxr = vec[0] - xr;
+		}
+		if (vec[1] - yr > 6 || vec[1] - yr < -6){
+			dyr = vec[1] + yr;
+		}
+		else{
+			dyr = vec[1] - yr;
+		}
+		if (vec[2] - zr > 6 || vec[2] - zr < -6){
+			dzr = vec[2] + zr;
+		}
+		else{
+			dzr = vec[2] - zr;
+		}
+
+		// rotational acceleration
+		axr = dxr - vxr;
+		ayr = dyr - vyr;
+		azr = dzr - vzr;
+
+		// rotational velocity
+		vxr = dxr;
+		vyr = dyr;
+		vzr = dzr;
+
+		// rotation
+		xr = vec[0];
+		yr = vec[1];
+		zr = vec[2];
 
 		timings[1] = tock();
 
@@ -157,17 +239,23 @@ int main(int argc, char ** argv) {
 
 		timings[6] = tock();
 
-		*logstream << frame << "\t" << timings[1] - timings[0] << "\t" //  acquisition
-				<< timings[2] - timings[1] << "\t"     //  preprocessing
-				<< timings[3] - timings[2] << "\t"     //  tracking
-				<< timings[4] - timings[3] << "\t"     //  integration
-				<< timings[5] - timings[4] << "\t"     //  raycasting
-				<< timings[6] - timings[5] << "\t"     //  rendering
-				<< timings[5] - timings[1] << "\t"     //  computation
-				<< timings[6] - timings[0] << "\t"     //  total
-				<< xt << "\t" << yt << "\t" << zt << "\t"     //  X,Y,Z
-				<< tracked << "        \t" << integrated // tracked and integrated flags
-				<< std::endl;
+		*logstream << frame << "\t"                       // frame number
+			<< timings[1] - timings[0] << "\t"            // acquisition
+			<< timings[2] - timings[1] << "\t"            // preprocessing
+			<< timings[3] - timings[2] << "\t"            // tracking
+			<< timings[4] - timings[3] << "\t"            // integration
+			<< timings[5] - timings[4] << "\t"            // raycasting
+			<< timings[6] - timings[5] << "\t"            // rendering
+			<< timings[5] - timings[1] << "\t"            // computation
+			<< timings[6] - timings[0] << "\t"            // total
+			<< xt << "\t" << yt << "\t" << zt << "\t"     // X,Y,Z (translation)
+			<< xr << "\t" << yr << "\t" << zr << "\t"     // rotations
+			<< vxt << "\t" << vyt << "\t" << vzt << "\t"  // trans velocity
+			<< axt << "\t" << ayt << "\t" << azt << "\t"  // trans acceleration
+			<< vxr << "\t" << vyr << "\t" << vzr << "\t"  // rotation velocity
+			<< axr << "\t" << ayr << "\t" << azr << "\t"  // rotation acceleration
+			<< tracked << "\t" << integrated              // tracked and integrated flags
+			<< std::endl;
 
 		frame++;
 
